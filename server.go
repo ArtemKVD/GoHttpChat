@@ -102,10 +102,6 @@ func main() {
 		w.Header().Set("Content-Type", "text/html")
 		tmpl.Execute(w, nil)
 
-		name := r.FormValue("nametologin")
-		pass := r.FormValue("passtologin")
-
-		db.CheckLogPass(name, pass)
 	})
 
 	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
@@ -117,28 +113,44 @@ func main() {
 		}
 
 		name := r.FormValue("nametologin")
+		pass := r.FormValue("passtologin")
+		Check, err := db.CheckLogPass(name, pass)
 
-		acces := "Welcome"
+		if !Check {
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`
+            <!DOCTYPE html>
+            <html>
+            <body>
+                <h1 style="color:red">Invalid login or password</h1>
+                <a href="/login">Try again</a>
+            </body>
+            </html>
+        `))
+			return
+		}
 
 		tmpl, err := template.New("join").Parse(`
-			<!DOCTYPE html>
-			<html>
-			<head>
-			</head>
-			<body>
-				<h1>{{.Acces}} {{.Name}}!</h1>
-				<a href="/login">Quit</a>
-			</body>
-			</html>
-		`)
+        <!DOCTYPE html>
+        <html>
+        <head>
+        </head>
+        <body>
+            <h1>hello {{.Name}}!</h1>
+            <a href="/login">Quit</a>
+        </body>
+        </html>
+    `)
+		if err != nil {
+			http.Error(w, "error:", http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "text/html")
 		tmpl.Execute(w, struct {
-			Name  string
-			Acces string
+			Name string
 		}{
-			Name:  name,
-			Acces: acces,
+			Name: name,
 		})
 	})
 

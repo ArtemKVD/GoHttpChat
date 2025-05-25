@@ -41,7 +41,7 @@ func UsernameLogin(name string, pass string) {
 
 }
 
-func CheckLogPass(name string, pass string) bool {
+func CheckLogPass(name string, pass string) (bool, error) {
 	db, err := sql.Open("postgres", connectionDB)
 	defer db.Close()
 	if err != nil {
@@ -51,5 +51,5 @@ func CheckLogPass(name string, pass string) bool {
 	var passcheck string
 
 	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", name).Scan(&passcheck)
-	return passcheck == pass
+	return passcheck == pass, err
 }
