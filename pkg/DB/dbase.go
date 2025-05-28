@@ -53,3 +53,38 @@ func CheckLogPass(name string, pass string) (bool, error) {
 	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", name).Scan(&passcheck)
 	return passcheck == pass, err
 }
+
+func AddFriend(username string, friendname string) error {
+	db, err := sql.Open("postgres", connectionDB)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec("INSERT INTO friends (user_id, friend_id) VALUES ($1, $2)", username, friendname)
+	return err
+}
+
+func GetFriends(username string) ([]string, error) {
+	db, err := sql.Open("postgres", connectionDB)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query("SELECT friend_id FROM friends WHERE user_id = $1", username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var friends []string
+	for rows.Next() {
+		var friend string
+		if err := rows.Scan(&friend); err != nil {
+			return nil, err
+		}
+		friends = append(friends, friend)
+	}
+	return friends, nil
+}

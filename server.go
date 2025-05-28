@@ -6,11 +6,54 @@ import (
 	"text/template"
 
 	db "github.com/ArtemKVD/HttpChatGo/pkg/DB"
+	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
 
 var name string
 var pass string
+var sessions = make(map[string]string)
+
+func createSession(username string, w http.ResponseWriter) {
+	sessionID := uuid.New().String()
+	sessions[sessionID] = username
+
+	http.SetCookie(w, &http.Cookie{
+		Name:  "session",
+		Value: sessionID,
+		Path:  "/",
+	})
+}
+
+func SessionUsername(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		return "", false
+	}
+
+	username, ok := sessions[cookie.Value]
+	return username, ok
+}
+
+func destroySession(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   10000,
+	})
+}
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := SessionUsername(r); !ok {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		next(w, r)
+	}
+}
 
 func main() {
 	mux := http.NewServeMux()
@@ -122,7 +165,7 @@ func main() {
             <!DOCTYPE html>
             <html>
             <body>
-                <h1 style="color:red">Invalid login or password</h1>
+                <h1>Invalid login or password</h1>
                 <a href="/login">Try again</a>
             </body>
             </html>
@@ -138,13 +181,18 @@ func main() {
         <body>
             <h1>hello {{.Name}}!</h1>
             <a href="/login">Quit</a>
+			<a href="/friends">Manage Friends</a>
         </body>
         </html>
-    `)
+    	`)
+
 		if err != nil {
 			http.Error(w, "error:", http.StatusInternalServerError)
 			return
 		}
+
+		createSession(name, w)
+		http.Redirect(w, r, "/friends", http.StatusSeeOther)
 
 		w.Header().Set("Content-Type", "text/html")
 		tmpl.Execute(w, struct {
@@ -153,10 +201,62 @@ func main() {
 			Name: name,
 		})
 	})
+	mux.HandleFunc("GET /friends", func(w http.ResponseWriter, r *http.Request) {
+		username, _ := SessionUsername(r)
 
-	err := http.ListenAndServe(":8081", mux)
-	if err != nil {
-		log.Fatal("Ошибка сервера: ", err)
-	}
+		friends, err := db.GetFriends(username)
+		if err != nil {
+			http.Error(w, "Failed to get friends list", http.StatusInternalServerError)
+			return
+		}
 
+		tmpl := template.Must(template.New("friends").Parse(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Friends</title>
+        </head>
+        <body>
+            <h1>Your Friends, {{.Username}}</h1>
+            <ul>
+                {{range .Friends}}
+                <li>{{.}}</li>
+                {{end}}
+            </ul>
+            
+            <h2>Add Friend</h2>
+            <form method="POST" action="/add_friend">
+                <input type="text" name="friendname" placeholder="friend name" required>
+                <button type="submit">add friend</button>
+            </form>
+            
+            <form method="POST" action="/logout">
+                <button type="submit">logout</button>
+            </form>
+        </body>
+        </html>
+    `))
+
+		w.Header().Set("Content-Type", "text/html")
+		tmpl.Execute(w, struct {
+			Username string
+			Friends  []string
+		}{
+			Username: username,
+			Friends:  friends,
+		})
+	})
+
+	mux.HandleFunc("POST /add_friend", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		username, _ := SessionUsername(r)
+		friendname := r.FormValue("friendname")
+
+		if err := db.AddFriend(username, friendname); err != nil {
+			http.Error(w, "Failed to add friend", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/friends", http.StatusSeeOther)
+	}))
+	http.ListenAndServe(":8081", mux)
 }
