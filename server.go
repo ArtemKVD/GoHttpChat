@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"text/template"
 
+	chat "github.com/ArtemKVD/HttpChatGo/chat"
 	db "github.com/ArtemKVD/HttpChatGo/pkg/DB"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
@@ -218,11 +219,13 @@ func main() {
         </head>
         <body>
             <h1>Your Friends, {{.Username}}</h1>
-            <ul>
-                {{range .Friends}}
-                <li>{{.}}</li>
-                {{end}}
-            </ul>
+			<ul>
+    			{{range .Friends}}
+    			<li>
+       				<a href="/chat/{{.}}">{{.}}</a>
+    			</li>
+    			{{end}}
+			</ul>
             
             <h2>Add Friend</h2>
             <form method="POST" action="/add_friend">
@@ -258,5 +261,65 @@ func main() {
 
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
 	}))
+
+	mux.HandleFunc("GET /chat/{friend}", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := SessionUsername(r)
+		friend := r.PathValue("friend")
+		messagelist, err := chat.Messagelist(user, friend)
+		if err != nil {
+			http.Error(w, "message fail", http.StatusInternalServerError)
+		}
+		tmpl := template.Must(template.New("chat").Parse(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+        </head>
+        <body>
+            <h1>Chat with {{.Friend}}</h1>
+			  <div id="messages">
+                {{range .Messages}}
+                <div>
+                    {{.Sname}}: {{.Text}}
+                </div>
+                {{end}}
+            </div>
+
+            <form method="POST" action="/send_message">
+                <input type="hidden" name="userfriend" value="{{.Friend}}">
+                <textarea name="message" required></textarea>
+                <button type="submit">Send</button>
+            </form>
+        </body>
+        </html>
+    `))
+
+		w.Header().Set("Content-Type", "text/html")
+
+		tmpl.Execute(w, struct {
+			CurrentUser string
+			Friend      string
+			Messages    []chat.Message
+		}{
+			CurrentUser: user,
+			Friend:      friend,
+			Messages:    messagelist,
+		})
+
+	}))
+
+	mux.HandleFunc("POST /send_message", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := SessionUsername(r)
+		userfriend := r.FormValue("userfriend")
+		message := r.FormValue("message")
+
+		if err := chat.Send(user, userfriend, message); err != nil {
+			http.Error(w, "Failed to send message", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/chat/"+userfriend, http.StatusSeeOther)
+	}))
+
 	http.ListenAndServe(":8081", mux)
+
 }
