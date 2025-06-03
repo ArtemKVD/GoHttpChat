@@ -6,6 +6,7 @@ import (
 	"text/template"
 
 	chat "github.com/ArtemKVD/HttpChatGo/chat"
+	news "github.com/ArtemKVD/HttpChatGo/news"
 	db "github.com/ArtemKVD/HttpChatGo/pkg/DB"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
@@ -31,7 +32,6 @@ func SessionUsername(r *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-
 	username, ok := sessions[cookie.Value]
 	return username, ok
 }
@@ -233,9 +233,13 @@ func main() {
                 <button type="submit">add friend</button>
             </form>
             
-            <form method="POST" action="/logout">
+            <form method="GET" action="/login">
                 <button type="submit">logout</button>
             </form>
+			<form method="POST" action="/news">
+                <button type="submit">NEWS</button>
+            </form>
+
         </body>
         </html>
     `))
@@ -289,6 +293,7 @@ func main() {
                 <textarea name="message" required></textarea>
                 <button type="submit">Send</button>
             </form>
+			<a href="/friends">Back to friendlist</a>
         </body>
         </html>
     `))
@@ -318,6 +323,72 @@ func main() {
 		}
 
 		http.Redirect(w, r, "/chat/"+userfriend, http.StatusSeeOther)
+	}))
+
+	mux.HandleFunc("GET /news/create", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		_, ok := SessionUsername(r)
+		if !ok {
+			http.Error(w, "not authorized", http.StatusBadRequest)
+			return
+		}
+		tmpl := template.Must(template.New("chat").Parse(`
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<title>Create News Post</title>
+			<style>
+				.news-form {
+					max-width: 600px;
+					margin: 20px auto;
+					padding: 20px;
+					border: 1px solid #ddd;
+					border-radius: 5px;
+				}
+				textarea {
+					width: 100%;
+					min-height: 100px;
+					margin-bottom: 10px;
+				}
+			</style>
+		</head>
+		<body>
+			<div class="news-form">
+				<h1>Create New Post</h1>
+				<form method="POST" action="/news/create">
+					<textarea name="post_text" placeholder="What's new?" required></textarea>
+					<button type="submit">Publish</button>
+					<a href="/news" style="margin-left: 10px;">Cancel</a>
+				</form>
+			</div>
+		</body>
+		</html>`))
+
+		w.Header().Set("Content-Type", "text/html")
+
+		tmpl.Execute(w, nil)
+
+		http.Redirect(w, r, "/news", http.StatusSeeOther)
+	}))
+
+	mux.HandleFunc("POST /news/create", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := SessionUsername(r)
+		if !ok {
+			http.Error(w, "Not authorized", http.StatusUnauthorized)
+			return
+		}
+		postText := r.FormValue("post_text")
+
+		newPost := news.Post{
+			Name: user,
+			Text: postText,
+		}
+
+		if err := news.Postcreate(newPost); err != nil {
+			http.Error(w, "create fail", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/news", http.StatusSeeOther)
 	}))
 
 	http.ListenAndServe(":8081", mux)
