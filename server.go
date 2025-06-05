@@ -325,66 +325,102 @@ func main() {
 		http.Redirect(w, r, "/chat/"+userfriend, http.StatusSeeOther)
 	}))
 
-	mux.HandleFunc("GET /news/create", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		_, ok := SessionUsername(r)
-		if !ok {
-			http.Error(w, "not authorized", http.StatusBadRequest)
+	mux.HandleFunc("GET /news", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		currentUser, _ := SessionUsername(r)
+
+		friends, err := db.GetFriends(currentUser)
+		if err != nil {
+			http.Error(w, "friendlist error", http.StatusInternalServerError)
 			return
 		}
-		tmpl := template.Must(template.New("chat").Parse(`
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<title>Create News Post</title>
-			<style>
-				.news-form {
-					max-width: 600px;
-					margin: 20px auto;
-					padding: 20px;
-					border: 1px solid #ddd;
-					border-radius: 5px;
-				}
-				textarea {
-					width: 100%;
-					min-height: 100px;
-					margin-bottom: 10px;
-				}
-			</style>
-		</head>
-		<body>
-			<div class="news-form">
-				<h1>Create New Post</h1>
-				<form method="POST" action="/news/create">
-					<textarea name="post_text" placeholder="What's new?" required></textarea>
-					<button type="submit">Publish</button>
-					<a href="/news" style="margin-left: 10px;">Cancel</a>
-				</form>
-			</div>
-		</body>
-		</html>`))
 
-		w.Header().Set("Content-Type", "text/html")
+		var posts []news.Post
+		posts, err = news.GetFriendsNews(friends)
+		if err != nil {
+			log.Printf("news error: %v", err)
+		}
 
-		tmpl.Execute(w, nil)
+		tmpl := template.Must(template.New("news").Parse(`
+         <!DOCTYPE html>
+        <html>
+        <head>
+            <title>news</title>
+            <style>
+                .news-container {
+                    max-width: 800px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }
+                .news-item {
+                    border-radius: 8px;
+                    padding: 15px;
+                    margin-bottom: 15px;
+                }
+                .news-author {
+                    font-weight: bold;
+                    margin-bottom: 5px;
+                }
+                .news-content {
+                    margin: 10px 0;
+                }
+                textarea {
+                    min-height: 100px;
+                    padding: 10px;
+                    margin-bottom: 10px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="news-container">
+                <h1>News</h1>
+                
+                <div class="create-form">
+                    <form method="POST" action="/news">
+                        <textarea name="post_text" placeholder="write your post" required></textarea>
+                        <button type="submit">Post</button>
+                    </form>
+                </div>
 
-		http.Redirect(w, r, "/news", http.StatusSeeOther)
+
+                {{if .Posts}}
+                    {{range .Posts}}
+                    <div class="news-item">
+                        <div class="news-author">{{.Name}}</div>
+                        <div class="news-content">{{.Text}}</div>
+                    </div>
+                    {{end}}
+                {{else}}
+                    <p>no news</p>
+                {{end}}
+            </div>
+        </body>
+        </html>
+    `))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+		if err := tmpl.Execute(w, struct {
+			Posts []news.Post
+		}{
+			Posts: posts,
+		}); err != nil {
+			log.Printf("Error executing template: %v", err)
+		}
 	}))
 
-	mux.HandleFunc("POST /news/create", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := SessionUsername(r)
+	mux.HandleFunc("POST /news", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		username, ok := SessionUsername(r)
 		if !ok {
-			http.Error(w, "Not authorized", http.StatusUnauthorized)
+			http.Error(w, "login error", http.StatusUnauthorized)
 			return
 		}
 		postText := r.FormValue("post_text")
-
-		newPost := news.Post{
-			Name: user,
+		err := news.Postcreate(news.Post{
+			Name: username,
 			Text: postText,
-		}
-
-		if err := news.Postcreate(newPost); err != nil {
-			http.Error(w, "create fail", http.StatusInternalServerError)
+		})
+		if err != nil {
+			http.Error(w, "Failed to create post", http.StatusInternalServerError)
 			return
 		}
 

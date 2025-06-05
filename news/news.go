@@ -40,7 +40,7 @@ func GetFriendsNews(friends []string) ([]Post, error) {
 	}
 
 	query := fmt.Sprintf(`
-        SELECT name, post,
+        SELECT name, post
         FROM news 
         WHERE name IN (%s)
         LIMIT 100
