@@ -88,3 +88,22 @@ func GetFriends(username string) ([]string, error) {
 	}
 	return friends, nil
 }
+
+func Userlist() ([]string, error) {
+	db, err := sql.Open("postgres", connectionDB)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT name FROM UserLP")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []string
+	for rows.Next() {
+		var username string
+		users = append(users, username)
+	}
+	return users, err
+}

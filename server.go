@@ -16,6 +16,8 @@ var name string
 var pass string
 var sessions = make(map[string]string)
 
+const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
+
 func createSession(username string, w http.ResponseWriter) {
 	sessionID := uuid.New().String()
 	sessions[sessionID] = username
@@ -408,25 +410,112 @@ func main() {
 		}
 	}))
 
-	mux.HandleFunc("POST /news", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		username, ok := SessionUsername(r)
-		if !ok {
-			http.Error(w, "login error", http.StatusUnauthorized)
-			return
-		}
-		postText := r.FormValue("post_text")
-		err := news.Postcreate(news.Post{
-			Name: username,
-			Text: postText,
-		})
-		if err != nil {
-			http.Error(w, "Failed to create post", http.StatusInternalServerError)
+	mux.HandleFunc("GET /admin/login", func(w http.ResponseWriter, r *http.Request) {
+		tmpl := template.Must(template.New("adminLogin").Parse(`
+		<!DOCTYPE html>
+		<html>
+		<head>
+		</head>
+		<body>
+			<form method="POST" action="/admin/login">
+				<label>Username: <input type="text" name="username" required></label><br>
+				<label>Password: <input type="password" name="password" required></label><br>
+				<button type="submit">Login</button>
+			</form>
+		</body>
+		</html>
+		`))
+
+		w.Header().Set("Content-Type", "text/html")
+		tmpl.Execute(w, nil)
+	})
+
+	mux.HandleFunc("POST /admin/login", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
-		http.Redirect(w, r, "/news", http.StatusSeeOther)
+		username := r.FormValue("username")
+		password := r.FormValue("password")
+
+		isAdmin, err := db.IsAdmin(username, password)
+		if err != nil {
+			log.Printf("Admin auth error: %v", err)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+
+		if !isAdmin {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("wrong login or password"))
+			return
+		}
+
+		createSession(username, w)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("GET /admin", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		username, _ := SessionUsername(r)
+		users, err := db.Userlist()
+		if err != nil {
+			return
+		}
+		if username != "Admin" {
+			http.Error(w, "You are not admin", http.StatusForbidden)
+			return
+		}
+
+		tmpl := template.Must(template.New("adminPanel").Parse(`
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<title>Admin Panel</title>
+			<style>
+				body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+				.user-list { margin: 20px 0; border: 1px solid #ddd; padding: 15px; }
+				.user-item { padding: 8px 0; border-bottom: 1px solid #eee; }
+				.block-btn { color: red; margin-left: 10px; }
+			</style>
+		</head>
+		<body>
+			<h1>Admin Panel</h1>
+			
+			<div class="user-list">
+				<h2>User List</h2>
+				{{range .Users}}
+				<div class="user-item">
+					{{.}}
+					<form method="POST" action="/admin/block" style="display: inline;">
+						<input type="hidden" name="username" value="{{.}}">
+						<button type="submit" class="block-btn">Block</button>
+					</form>
+				</div>
+				{{end}}
+			</div>
+		</body>
+		</html>
+		`))
+
+		w.Header().Set("Content-Type", "text/html")
+		tmpl.Execute(w, struct {
+			Users []string
+		}{
+			Users: users,
+		})
 	}))
 
-	http.ListenAndServe(":8081", mux)
+	mux.HandleFunc("POST /admin/block", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 
+		username := r.FormValue("username")
+
+		if err := db.Block(username); err != nil {
+			http.Error(w, "block fail", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	}))
+	http.ListenAndServe(":8081", mux)
 }

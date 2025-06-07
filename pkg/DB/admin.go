@@ -7,6 +7,7 @@ import (
 )
 
 // admin
+
 func IsAdmin(username string, password string) (bool, error) {
 	var pass string
 	db, err := sql.Open("postgres", connectionDB)
@@ -30,6 +31,6 @@ func Block(username string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec("DELETE user FROM UserLP WHERE name = $1", username)
+	_, err = db.Exec("DELETE FROM UserLP WHERE name = $1", username)
 	return err
 }
