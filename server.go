@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"text/template"
+	"time"
 
 	chat "github.com/ArtemKVD/HttpChatGo/chat"
 	news "github.com/ArtemKVD/HttpChatGo/news"
@@ -60,6 +61,12 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 func main() {
 	mux := http.NewServeMux()
+	shutdown := make(chan struct{})
+	server := &http.Server{
+		Addr:    ":8081",
+		Handler: mux,
+	}
+
 	mux.HandleFunc("GET /register", func(w http.ResponseWriter, r *http.Request) {
 
 		tmpl, err := template.New("register").Parse(`
@@ -83,7 +90,7 @@ func main() {
 		`)
 
 		if err != nil {
-			log.Fatal("error:", err)
+			log.Printf("get register page error: %v", err)
 		}
 
 		w.Header().Set("Content-Type", "text/html")
@@ -93,6 +100,7 @@ func main() {
 		err := r.ParseForm()
 		if err != nil {
 			http.Error(w, "request error", http.StatusBadRequest)
+			log.Printf("request error %v", err)
 			return
 		}
 
@@ -106,6 +114,7 @@ func main() {
 			err := db.UsernameInsert(name, pass)
 			if err != nil {
 				http.Error(w, "DB not accept you", http.StatusInternalServerError)
+				log.Printf("Db not accept user %v: error:%v", name, err)
 			}
 		}
 		w.Header().Set("Content-Type", "text/html")
@@ -142,10 +151,11 @@ func main() {
 		`)
 
 		if err != nil {
-			log.Fatal("error:", err)
+			log.Printf("get login page error: %v", err)
 		}
 
 		w.Header().Set("Content-Type", "text/html")
+
 		tmpl.Execute(w, nil)
 
 	})
@@ -155,12 +165,17 @@ func main() {
 
 		if err != nil {
 			http.Error(w, "request error", http.StatusBadRequest)
+			log.Printf("request error: %v", err)
 			return
 		}
 
 		name := r.FormValue("nametologin")
 		pass := r.FormValue("passtologin")
+
 		Check, err := db.CheckLogPass(name, pass)
+		if err != nil {
+			log.Printf("error check login and pass with DB: %v", err)
+		}
 
 		if !Check {
 			w.Header().Set("Content-Type", "text/html")
@@ -191,10 +206,13 @@ func main() {
 
 		if err != nil {
 			http.Error(w, "error:", http.StatusInternalServerError)
+			log.Printf("Join error: %v", err)
 			return
 		}
 
 		createSession(name, w)
+		log.Printf("User %v login at %v", name, time.Now())
+
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
 
 		w.Header().Set("Content-Type", "text/html")
@@ -210,6 +228,7 @@ func main() {
 		friends, err := db.GetFriends(username)
 		if err != nil {
 			http.Error(w, "Failed to get friends list", http.StatusInternalServerError)
+			log.Printf("get friend list user %v error: %v", username, err)
 			return
 		}
 
@@ -262,6 +281,7 @@ func main() {
 
 		if err := db.AddFriend(username, friendname); err != nil {
 			http.Error(w, "Failed to add friend", http.StatusInternalServerError)
+			log.Printf("Add friend fail user:%v friend:%v error: %v", username, friendname, err)
 			return
 		}
 
@@ -274,6 +294,7 @@ func main() {
 		messagelist, err := chat.Messagelist(user, friend)
 		if err != nil {
 			http.Error(w, "message fail", http.StatusInternalServerError)
+			log.Printf("message list delivery fail by %v to %v: %v", user, friend, err)
 		}
 		tmpl := template.Must(template.New("chat").Parse(`
         <!DOCTYPE html>
@@ -321,6 +342,7 @@ func main() {
 
 		if err := chat.Send(user, userfriend, message); err != nil {
 			http.Error(w, "Failed to send message", http.StatusInternalServerError)
+			log.Printf("Send message error: %v from user: %v to user: %v", err, user, userfriend)
 			return
 		}
 
@@ -333,13 +355,14 @@ func main() {
 		friends, err := db.GetFriends(currentUser)
 		if err != nil {
 			http.Error(w, "friendlist error", http.StatusInternalServerError)
+			log.Printf("Get friend list error by user:%v : %v", currentUser, err)
 			return
 		}
 
 		var posts []news.Post
 		posts, err = news.GetFriendsNews(friends)
 		if err != nil {
-			log.Printf("news error: %v", err)
+			log.Printf("news error by user %v: %v", currentUser, err)
 		}
 
 		tmpl := template.Must(template.New("news").Parse(`
@@ -410,6 +433,25 @@ func main() {
 		}
 	}))
 
+	mux.HandleFunc("POST /news", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		currentUser, _ := SessionUsername(r)
+
+		postText := r.FormValue("post_text")
+
+		err := news.Postcreate(news.Post{
+			Name: currentUser,
+			Text: postText,
+		})
+		if err != nil {
+			log.Printf("Post create error by %v: %v", currentUser, err)
+			http.Error(w, "Failed to create post", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("User %v created a news post at %v", currentUser, time.Now())
+		http.Redirect(w, r, "/news", http.StatusSeeOther)
+	}))
+
 	mux.HandleFunc("GET /admin/login", func(w http.ResponseWriter, r *http.Request) {
 		tmpl := template.Must(template.New("adminLogin").Parse(`
 		<!DOCTYPE html>
@@ -460,6 +502,7 @@ func main() {
 		username, _ := SessionUsername(r)
 		users, err := db.Userlist()
 		if err != nil {
+			log.Printf("Get userlist error: %v", err)
 			return
 		}
 		if username != "Admin" {
@@ -494,6 +537,9 @@ func main() {
 				</div>
 				{{end}}
 			</div>
+			<form method="POST" action="/admin/shutdown">
+				<button type="submit" class="shutdown-btn">Shutdown Server</button>
+			</form>
 		</body>
 		</html>
 		`))
@@ -512,10 +558,36 @@ func main() {
 
 		if err := db.Block(username); err != nil {
 			http.Error(w, "block fail", http.StatusInternalServerError)
+			log.Printf("block user error: %v", err)
 			return
 		}
 
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}))
-	http.ListenAndServe(":8081", mux)
+
+	mux.HandleFunc("POST /admin/shutdown", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		admin, _ := SessionUsername(r)
+		if admin != "Admin" {
+			http.Error(w, "You are not admin", http.StatusForbidden)
+			return
+		}
+
+		log.Printf("server shutdown")
+
+		w.Header().Set("Content-Type", "text/html")
+
+		close(shutdown)
+	}))
+
+	go func() {
+		log.Printf("------------------------------------------------\nServer starting on :8081")
+		err := server.ListenAndServe()
+		if err != nil {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	<-shutdown
+
+	log.Println("server is shut down")
 }

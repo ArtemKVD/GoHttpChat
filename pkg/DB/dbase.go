@@ -95,15 +95,24 @@ func Userlist() ([]string, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query("SELECT name FROM UserLP")
+	rows, err := db.Query("SELECT name FROM UserLP WHERE name != 'Admin'")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	var users []string
 	for rows.Next() {
 		var username string
+		err := rows.Scan(&username)
+		if err != nil {
+			log.Printf("Scan error: %v", err)
+			continue
+		}
 		users = append(users, username)
 	}
-	return users, err
+
+	log.Printf("Admin get users list")
+	return users, nil
+
 }
