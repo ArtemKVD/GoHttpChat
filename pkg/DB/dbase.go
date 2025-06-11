@@ -116,3 +116,15 @@ func Userlist() ([]string, error) {
 	return users, nil
 
 }
+
+func GetUserPasswordHash(username string) (string, error) {
+	db, err := sql.Open("postgres", connectionDB)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+
+	var hash string
+	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", username).Scan(&hash)
+	return hash, err
+}

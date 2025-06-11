@@ -2,11 +2,16 @@ package main
 
 import (
 	"log"
+	"math/big"
 	"net/http"
 	"text/template"
 	"time"
 
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 
 	chat "github.com/ArtemKVD/HttpChatGo/chat"
 	news "github.com/ArtemKVD/HttpChatGo/news"
@@ -61,6 +66,34 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func GenerateSelfSignedCert() (tls.Certificate, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Localhost"},
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
+		DNSNames:  []string{"localhost"},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  priv,
+	}, nil
+}
+
 func main() {
 	mux := http.NewServeMux()
 	shutdown := make(chan struct{})
@@ -106,10 +139,16 @@ func main() {
 		pass := r.FormValue("pass")
 		pass2 := r.FormValue("pass2")
 
+		hashedpass, err := db.HashPassword(pass)
+
+		if err != nil {
+			log.Printf("error hashing paswwrod: %v", err)
+		}
+
 		if pass != pass2 {
 			http.Error(w, "password1 != password2", http.StatusInternalServerError)
 		} else {
-			err := db.UsernameInsert(name, pass)
+			err := db.UsernameInsert(name, hashedpass)
 			if err != nil {
 				http.Error(w, "DB not accept you", http.StatusInternalServerError)
 				log.Printf("Db not accept user %v: error:%v", name, err)
@@ -169,10 +208,15 @@ func main() {
 
 		name := r.FormValue("nametologin")
 		pass := r.FormValue("passtologin")
+		HashPass, err := db.GetUserPasswordHash(name)
 
-		Check, err := db.CheckLogPass(name, pass)
+		if err != nil {
+			log.Printf("error check hash password")
+		}
+		Check, err := db.CheckLogPass(name, HashPass)
 		if err != nil {
 			log.Printf("error check login and pass with DB: %v", err)
+			log.Printf(pass)
 		}
 
 		if !Check {
@@ -576,7 +620,7 @@ func main() {
 
 		close(shutdown)
 	}))
-	cert, err := generateSelfSignedCert()
+	cert, err := GenerateSelfSignedCert()
 	if err != nil {
 		log.Fatalf("Failed to generate certificate: %v", err)
 	}
@@ -600,4 +644,8 @@ func main() {
 
 	log.Println("HTTPS server running on :8443")
 	server.ListenAndServeTLS("", "")
+
+	<-shutdown
+
+	log.Println("server is shut down")
 }
