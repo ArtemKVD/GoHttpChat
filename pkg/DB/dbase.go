@@ -2,7 +2,6 @@ package dbase
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 
 	_ "github.com/lib/pq"
@@ -13,26 +12,36 @@ const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
 func UsernameInsert(name string, pass string) error {
 	var a string
 	db, err := sql.Open("postgres", connectionDB)
-	defer db.Close()
+
 	if err != nil {
 		log.Fatal("error:", err)
 		return err
 	}
+
+	defer db.Close()
+
 	CheckName := "SELECT name FROM UserLP WHERE name = $1"
 
 	err = db.QueryRow(CheckName, name).Scan(&a)
+
+	if err != nil && err != sql.ErrNoRows {
+		log.Print("Db query error", err)
+		return err
+	}
 	InsertQuery := "INSERT INTO UserLP (name, pass) VALUES ($1, $2)"
 	result, err := db.Exec(InsertQuery, name, pass)
 	if err != nil {
+		log.Print("db insert error")
+		return err
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		fmt.Println("pizdec1")
+		log.Println("pizdec1")
 		return err
 	}
 
 	if rowsAffected == 0 {
-		fmt.Println("pizdec2")
+		log.Println("pizdec2")
 	}
 	return err
 }

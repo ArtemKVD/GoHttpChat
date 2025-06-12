@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+        </head>
+        <body>
+            <h1>Chat with {{.Friend}}</h1>
+			  <div id="messages">
+                {{range .Messages}}
+                <div>
+                    {{.Sname}}: {{.Text}}
+                </div>
+                {{end}}
+            </div>
+
+            <form method="POST" action="/send_message">
+                <input type="hidden" name="userfriend" value="{{.Friend}}">
+                <textarea name="message" required></textarea>
+                <button type="submit">Send</button>
+            </form>
+			<a href="/friends">Back to friendlist</a>
+        </body>
+        </html>

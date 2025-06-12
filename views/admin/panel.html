@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+		<html>
+		<head>
+			<title>Admin Panel</title>
+			<style>
+				body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+				.user-list { margin: 20px 0; border: 1px solid #ddd; padding: 15px; }
+				.user-item { padding: 8px 0; border-bottom: 1px solid #eee; }
+				.block-btn { color: red; margin-left: 10px; }
+			</style>
+		</head>
+		<body>
+			<h1>Admin Panel</h1>
+			
+			<div class="user-list">
+				<h2>User List</h2>
+				{{range .Users}}
+				<div class="user-item">
+					{{.}}
+					<form method="POST" action="/admin/block" style="display: inline;">
+						<input type="hidden" name="username" value="{{.}}">
+						<button type="submit" class="block-btn">Block</button>
+					</form>
+				</div>
+				{{end}}
+			</div>
+			<form method="POST" action="/admin/shutdown">
+				<button type="submit" class="shutdown-btn">Shutdown Server</button>
+			</form>
+		</body>
+		</html>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <title>Friends</title>
+        </head>
+        <body>
+            <h1>Your Friends, {{.Username}}</h1>
+			<ul>
+    			{{range .Friends}}
+    			<li>
+       				<a href="/chat/{{.}}">{{.}}</a>
+    			</li>
+    			{{end}}
+			</ul>
+            
+            <h2>Add Friend</h2>
+            <form method="POST" action="/add_friend">
+                <input type="text" name="friendname" placeholder="friend name" required>
+                <button type="submit">add friend</button>
+            </form>
+            
+            <form method="GET" action="/login">
+                <button type="submit">logout</button>
+            </form>
+			<form method="POST" action="/news">
+                <button type="submit">NEWS</button>
+            </form>
+
+        </body>
+        </html>
