@@ -1,22 +1,76 @@
 <!DOCTYPE html>
-        <html>
-        <head>
-        </head>
-        <body>
-            <h1>Chat with {{.Friend}}</h1>
-			  <div id="messages">
-                {{range .Messages}}
-                <div>
-                    {{.Sname}}: {{.Text}}
-                </div>
-                {{end}}
-            </div>
+<html>
+<head>
+    <title>Chat with {{.Friend}}</title>
+    <style>
+        #messages {
+            height: 300px;
+            overflow-y: scroll;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #message {
+            width: 100%;
+            min-height: 60px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chat with {{.Friend}}</h1>
+    <div id="messages">
+        {{range .Messages}}
+        <div>
+            <strong>{{.Sname}}:</strong> {{.Text}}
+        </div>
+        {{end}}
+    </div>
 
-            <form method="POST" action="/send_message">
-                <input type="hidden" name="userfriend" value="{{.Friend}}">
-                <textarea name="message" required></textarea>
-                <button type="submit">Send</button>
-            </form>
-			<a href="/friends">Back to friendlist</a>
-        </body>
-        </html>
+    <form id="chat-form">
+        <input type="hidden" id="friend" value="{{.Friend}}">
+        <textarea id="message" required></textarea>
+        <button type="submit">Send</button>
+    </form>
+    <a href="/friends">Back to friendlist</a>
+
+    <script>
+    const ws = new WebSocket(`wss://${location.host}/ws`);
+    const form = document.getElementById('chat-form');
+    const messageInput = document.getElementById('message');
+    const friendInput = document.getElementById('friend');
+    const messagesDiv = document.getElementById('messages');
+
+    ws.onmessage = function(e) {
+        try {
+            const msg = JSON.parse(e.data);
+            messagesDiv.innerHTML += `<div><strong>${msg.sender}:</strong> ${msg.text}</div>`;
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        } catch (err) {
+            console.error('Error parsing message:', err);
+        }
+    };
+
+    ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+    };
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const message = messageInput.value.trim();
+        
+        if (message && ws.readyState === WebSocket.OPEN) {
+            const msg = {
+                sender: "{{.CurrentUser}}",
+                senderfriend: friendInput.value,
+                text: message
+            };
+            
+            ws.send(JSON.stringify(msg));
+            messageInput.value = '';
+        } else {
+            console.error('WebSocket error');
+        }
+    });
+    </script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"html/template"
 	"log"
 	"math/big"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"crypto/rand"
@@ -20,6 +22,7 @@ import (
 	news "github.com/ArtemKVD/HttpChatGo/news"
 	db "github.com/ArtemKVD/HttpChatGo/pkg/DB"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
 )
 
@@ -27,7 +30,90 @@ var name string
 var pass string
 var sessions = make(map[string]string)
 
+var clients = make(map[*Client]bool)
+var broadcast = make(chan Message)
+var mutex = &sync.Mutex{}
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
+type Client struct {
+	conn *websocket.Conn
+	send chan []byte
+	user string
+}
+
+type Message struct {
+	Sender       string `json:"sender"`
+	SenderFriend string `json:"senderfriend"`
+	Text         string `json:"text"`
+}
+
 const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
+
+func (c *Client) ReadM() {
+	defer func() {
+		mutex.Lock()
+		delete(clients, c)
+		mutex.Unlock()
+		c.conn.Close()
+	}()
+
+	for {
+		var msg Message
+		err := c.conn.ReadJSON(&msg)
+		if err != nil {
+			log.Printf("Read error: %v", err)
+			break
+		}
+		msg.Sender = c.user
+		broadcast <- msg
+	}
+}
+
+func (c *Client) WriteM() {
+	defer c.conn.Close()
+	for {
+		message, ok := <-c.send
+		if !ok {
+			return
+		}
+		err := c.conn.WriteMessage(websocket.TextMessage, message)
+		if err != nil {
+			log.Printf("Write error: %v", err)
+			return
+		}
+	}
+}
+
+func handleConnections(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer conn.Close()
+
+	user, ok := SessionUsername(r)
+	if !ok {
+		return
+	}
+
+	client := &Client{
+		conn: conn,
+		send: make(chan []byte, 256),
+		user: user,
+	}
+
+	mutex.Lock()
+	clients[client] = true
+	mutex.Unlock()
+
+	go client.WriteM()
+	client.ReadM()
+}
 
 func loadTemplates() (*template.Template, error) {
 	tmpl := template.New("").Funcs(template.FuncMap{})
@@ -140,6 +226,7 @@ func main() {
 	if err != nil {
 		log.Printf("Error load templates %v", err)
 	}
+	mux.HandleFunc("GET /ws", handleConnections)
 	mux.HandleFunc("GET /register", func(w http.ResponseWriter, r *http.Request) {
 		err := templates.ExecuteTemplate(w, "auth/register.html", nil)
 		if err != nil {
@@ -333,6 +420,11 @@ func main() {
 			log.Printf("Send message error: %v from user: %v to user: %v", err, user, userfriend)
 			return
 		}
+		broadcast <- Message{
+			Sender:       user,
+			SenderFriend: userfriend,
+			Text:         message,
+		}
 
 		http.Redirect(w, r, "/chat/"+userfriend, http.StatusSeeOther)
 	}))
@@ -476,10 +568,27 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:      ":8443",
+		Addr:      ":8444",
 		Handler:   mux,
 		TLSConfig: tlsConfig,
 	}
+
+	go func() {
+		for msg := range broadcast {
+			mutex.Lock()
+			for client := range clients {
+				if client.user == msg.SenderFriend || client.user == msg.Sender {
+					response := map[string]string{
+						"sender": msg.Sender,
+						"text":   msg.Text,
+					}
+					jsonMsg, _ := json.Marshal(response)
+					client.send <- jsonMsg
+				}
+			}
+			mutex.Unlock()
+		}
+	}()
 
 	go func() {
 		http.ListenAndServe(":8080", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +596,7 @@ func main() {
 		}))
 	}()
 
-	log.Println("HTTPS server running on :8443")
+	log.Println("HTTPS server running on :8444")
 	server.ListenAndServeTLS("", "")
 
 	<-shutdown

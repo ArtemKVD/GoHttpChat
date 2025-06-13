@@ -2,9 +2,12 @@ package chat
 
 import (
 	"database/sql"
+	"sync"
 
 	_ "github.com/lib/pq"
 )
+
+var mutex sync.Mutex
 
 const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
 
