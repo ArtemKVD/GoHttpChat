@@ -1,0 +1,33 @@
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    environment:
+      - DB_HOST=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=admin
+      - DB_NAME=Users
+    depends_on:
+      - postgres
+    command: ["/postgrescheck.sh", "postgres:5432", "--", "/app/httpchatgo"]
+
+  postgres:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: Users
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
