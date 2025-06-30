@@ -12,16 +12,19 @@ func IsAdmin(username string, password string) (bool, error) {
 	db, err := sql.Open("postgres", connectionDB)
 	defer db.Close()
 	if err != nil {
+		log.Printf("Connection DB error")
 		return false, err
 	}
 	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", username).Scan(&pass)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		log.Printf("DB query error: %v", err)
 		return false, err
 	}
-	password, err = HashPassword(password)
-	if err != nil {
-		log.Printf("Hash error")
-		return false, err
+	if !CheckPassword(password, pass) {
+		return false, nil
 	}
 	return username == "Admin" && pass == password, err
 }

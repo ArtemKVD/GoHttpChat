@@ -11,21 +11,15 @@ COPY . .
 
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /app/httpchatgo ./server
 
-FROM alpine:3.18
+FROM alpine:3.19
 
 RUN apk add --no-cache postgresql-client
+
+WORKDIR /app
 
 COPY --from=builder /app/httpchatgo /app/httpchatgo
 COPY --from=builder /app/views /app/views
 
-COPY postgrescheck.sh /app/postgrescheck.sh
-RUN chmod +x /app/postgrescheck.sh
-
-WORKDIR /app
-
-EXPOSE 8080 8443
+EXPOSE 8080 8444
 
 CMD ["/app/httpchatgo"]
-
-RUN mkdir /var/log/app
-VOLUME /var/log/app

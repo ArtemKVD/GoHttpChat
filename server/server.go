@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"log"
@@ -18,6 +19,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 
+	cache "github.com/ArtemKVD/HttpChatGo/cache"
 	chat "github.com/ArtemKVD/HttpChatGo/chat"
 	news "github.com/ArtemKVD/HttpChatGo/news"
 	db "github.com/ArtemKVD/HttpChatGo/pkg/DB"
@@ -25,6 +27,8 @@ import (
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
 )
+
+var redisClient *cache.RedisClient
 
 var name string
 var pass string
@@ -51,7 +55,7 @@ type Message struct {
 	Text         string `json:"text"`
 }
 
-const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
+const connectionDB = "host=postgres user=postgres dbname=Users password=admin sslmode=disable"
 
 func (c *Client) ReadM() {
 	defer func() {
@@ -113,6 +117,15 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 
 	go client.WriteM()
 	client.ReadM()
+	ctx := context.Background()
+	pubsub := redisClient.Subscribe(ctx, "chat_updates")
+	defer pubsub.Close()
+
+	go func() {
+		for msg := range pubsub.Channel() {
+			conn.WriteMessage(websocket.TextMessage, []byte(msg.Payload))
+		}
+	}()
 }
 
 func loadTemplates() (*template.Template, error) {
@@ -146,12 +159,22 @@ func loadTemplates() (*template.Template, error) {
 
 func createSession(username string, w http.ResponseWriter) {
 	sessionID := uuid.New().String()
-	sessions[sessionID] = username
+	ctx := context.Background()
+
+	err := redisClient.Set(ctx, "session:"+sessionID, username, 24*time.Hour)
+	if err != nil {
+		log.Printf("Ошибка создания сессии в Redis: %v", err)
+		return
+	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name:  "session",
-		Value: sessionID,
-		Path:  "/",
+		Name:     "session",
+		Value:    sessionID,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   86400,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -160,8 +183,14 @@ func SessionUsername(r *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	username, ok := sessions[cookie.Value]
-	return username, ok
+
+	ctx := context.Background()
+	username, err := redisClient.Get(ctx, "session:"+cookie.Value)
+	if err != nil {
+		return "", false
+	}
+
+	return username, true
 }
 
 func destroySession(w http.ResponseWriter) {
@@ -176,11 +205,21 @@ func destroySession(w http.ResponseWriter) {
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := SessionUsername(r); !ok {
+		cookie, err := r.Cookie("session")
+		if err != nil {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next(w, r)
+
+		ctx := context.Background()
+		username, err := redisClient.Get(ctx, "session:"+cookie.Value)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		ctx = context.WithValue(r.Context(), "username", username)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -213,6 +252,17 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 }
 
 func main() {
+	db.WaitPostgres()
+	redisHost := os.Getenv("REDIS_HOST")
+	if redisHost == "" {
+		redisHost = "redis"
+	}
+	redisClient = cache.NewRedisClient(redisHost+":6379", "")
+	cache.WaitRedis(redisClient)
+
+	if err := redisClient.Ping(context.Background()); err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
 	mux := http.NewServeMux()
 
 	shutdown := make(chan struct{})
@@ -262,17 +312,9 @@ func main() {
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`
-        <!DOCTYPE html>
-        <html>
-        <body>
-            <h1>Registration successful</h1>
-            <p>Welcome, ` + name + `!</p>
-            <a href="/login">Login</a>
-        </body>
-        </html>
-    `))
+		createSession(name, w)
+
+		http.Redirect(w, r, "/friends", http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
@@ -293,13 +335,10 @@ func main() {
 		}
 
 		name := r.FormValue("nametologin")
-		pass := r.FormValue("passtologin")
-		HashPass, err := db.GetUserPasswordHash(name)
 
-		if err != nil {
-			log.Printf("error check hash password")
-		}
-		Check, err := db.CheckLogPass(name, HashPass)
+		pass := r.FormValue("passtologin")
+
+		Check, err := db.CheckLogPass(name, pass)
 		if err != nil {
 			log.Printf("error check login and pass with DB: %v", err)
 			log.Printf(pass)
@@ -350,8 +389,26 @@ func main() {
 			Name: name,
 		})
 	})
+	go mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("session")
+		if err == nil {
+			ctx := context.Background()
+			redisClient.Del(ctx, "session:"+cookie.Value)
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:   "session",
+			Value:  "",
+			MaxAge: -1,
+		})
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	})
 	mux.HandleFunc("GET /friends", func(w http.ResponseWriter, r *http.Request) {
-		username, _ := SessionUsername(r)
+		username, ok := SessionUsername(r)
+		if !ok {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
 
 		friends, err := db.GetFriends(username)
 		if err != nil {
@@ -414,7 +471,10 @@ func main() {
 		user, _ := SessionUsername(r)
 		userfriend := r.FormValue("userfriend")
 		message := r.FormValue("message")
-
+		err := redisClient.CacheMessage(r.Context(), "room1", []byte(message), 24*time.Hour)
+		if err != nil {
+			log.Printf("redis error")
+		}
 		if err := chat.Send(user, userfriend, message); err != nil {
 			http.Error(w, "Failed to send message", http.StatusInternalServerError)
 			log.Printf("Send message error: %v from user: %v to user: %v", err, user, userfriend)

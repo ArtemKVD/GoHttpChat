@@ -3,11 +3,30 @@ package dbase
 import (
 	"database/sql"
 	"log"
+	"time"
 
 	_ "github.com/lib/pq"
 )
 
-const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
+const connectionDB = "host=postgres user=postgres dbname=Users password=admin sslmode=disable"
+
+func WaitPostgres() {
+	db, err := sql.Open("postgres", connectionDB)
+	if err != nil {
+		log.Printf("db not open")
+	}
+	defer db.Close()
+
+	for i := 0; i < 5; i++ {
+		err := db.Ping()
+		if err == nil {
+			log.Print("Connected to Postgresql")
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+	log.Print("Not connected")
+}
 
 func UsernameInsert(name string, pass string) error {
 	var a string
@@ -46,21 +65,21 @@ func UsernameInsert(name string, pass string) error {
 	return err
 }
 
-func UsernameLogin(name string, pass string) {
-
-}
-
 func CheckLogPass(name string, pass string) (bool, error) {
 	db, err := sql.Open("postgres", connectionDB)
-	defer db.Close()
+
 	if err != nil {
 		log.Fatal("error", err)
 	}
+	defer db.Close()
 
 	var passcheck string
 
 	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", name).Scan(&passcheck)
-	return passcheck == pass, err
+	if err != nil {
+		return false, nil
+	}
+	return CheckPassword(pass, passcheck), err
 }
 
 func AddFriend(username string, friendname string) error {

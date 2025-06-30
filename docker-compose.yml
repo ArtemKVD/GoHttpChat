@@ -1,33 +1,62 @@
+version: '3.8'
 
 services:
   app:
     build: .
     ports:
       - "8080:8080"
-      - "8443:8443"
+      - "8444:8444"
     environment:
+      - DB_URL=postgres://postgres:admin@postgres:5432/Users?sslmode=disable
       - DB_HOST=postgres
       - DB_USER=postgres
       - DB_PASSWORD=admin
       - DB_NAME=Users
+      - REDIS_HOST=redis  
     depends_on:
-      - postgres
-    command: ["/postgrescheck.sh", "postgres:5432", "--", "/app/httpchatgo"]
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend-network
+
+  redis:
+    image: redis:7-alpine
+    hostname: redis  
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend-network
 
   postgres:
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
     image: postgres:15-alpine
+    hostname: postgres  
     environment:
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: Users
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend-network
+
+networks:
+  backend-network:
+    driver: bridge
 
 volumes:
+  redis_data:
   postgres_data:

@@ -1,0 +1,28 @@
+CREATE TABLE IF NOT EXISTS UserLP (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) UNIQUE NOT NULL,
+    pass VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS friends (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    friend_id VARCHAR(255) NOT NULL,
+    UNIQUE(user_id, friend_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    userfriend_id VARCHAR(255) NOT NULL,
+    message_text TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS news (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    post TEXT NOT NULL
+);
+
+INSERT INTO UserLP (name, pass) 
+VALUES ('Admin', '$2a$12$S7zlhJ.7Zz0j6G3bIY4wE.XTjN9v7fL3b6WzJ2kLm1nVqR5sQdH9K')

@@ -13,7 +13,7 @@ type Post struct {
 	Text string
 }
 
-const connectionDB = "user=postgres dbname=Users password=admin sslmode=disable"
+const connectionDB = "host=postgres user=postgres dbname=Users password=admin sslmode=disable"
 
 func Postcreate(postinput Post) error {
 	db, err := sql.Open("postgres", connectionDB)
