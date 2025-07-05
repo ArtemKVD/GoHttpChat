@@ -30,6 +30,7 @@ func Send(User string, UserFriend string, message string) error {
 	if err != nil {
 		log.Printf("insert message error")
 	}
+	log.Println("Message saved")
 	return err
 }
 
@@ -51,6 +52,7 @@ func Messagelist(user1 string, user2 string) ([]Message, error) {
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("found message %v", m)
 		messages = append(messages, m)
 	}
 	return messages, nil

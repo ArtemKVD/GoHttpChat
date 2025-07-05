@@ -8,25 +8,20 @@ import (
 )
 
 func IsAdmin(username string, password string) (bool, error) {
-	var pass string
 	db, err := sql.Open("postgres", connectionDB)
+
+	if err != nil {
+		log.Fatal("error", err)
+	}
 	defer db.Close()
+
+	var passcheck string
+
+	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", username).Scan(&passcheck)
 	if err != nil {
-		log.Printf("Connection DB error")
-		return false, err
-	}
-	err = db.QueryRow("SELECT pass FROM UserLP WHERE name = $1", username).Scan(&pass)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
-		log.Printf("DB query error: %v", err)
-		return false, err
-	}
-	if !CheckPassword(password, pass) {
 		return false, nil
 	}
-	return username == "Admin" && pass == password, err
+	return CheckPassword(password, passcheck), err
 }
 
 func Block(username string) error {

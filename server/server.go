@@ -19,6 +19,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	cache "github.com/ArtemKVD/HttpChatGo/cache"
 	chat "github.com/ArtemKVD/HttpChatGo/chat"
 	news "github.com/ArtemKVD/HttpChatGo/news"
@@ -26,6 +30,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
+)
+
+var (
+	messagesSend = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "chat_messages_sent_total",
+	}, []string{"sender", "receiver"})
+
+	activeUsers = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "chat_active_users",
+	})
+
+	httpDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "http_request_duration_seconds",
+		Buckets: []float64{0.1, 0.3, 0.5},
+	}, []string{"path", "method"})
 )
 
 var redisClient *cache.RedisClient
@@ -252,6 +271,15 @@ func GenerateSelfSignedCert() (tls.Certificate, error) {
 }
 
 func main() {
+	http.Handle("/metrics", promhttp.Handler())
+
+	go func() {
+		err := http.ListenAndServe(":2112", nil)
+		if err != nil {
+			log.Fatalf("Failed to start metrics server: %v", err)
+		}
+	}()
+
 	db.WaitPostgres()
 	redisHost := os.Getenv("REDIS_HOST")
 	if redisHost == "" {
@@ -378,6 +406,7 @@ func main() {
 		}
 
 		createSession(name, w)
+		activeUsers.Inc()
 		log.Printf("User %v login at %v", name, time.Now())
 
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
@@ -393,6 +422,7 @@ func main() {
 		cookie, err := r.Cookie("session")
 		if err == nil {
 			ctx := context.Background()
+			activeUsers.Dec()
 			redisClient.Del(ctx, "session:"+cookie.Value)
 		}
 
@@ -451,6 +481,7 @@ func main() {
 			http.Error(w, "message fail", http.StatusInternalServerError)
 			log.Printf("message list delivery fail by %v to %v: %v", user, friend, err)
 		}
+		log.Print("Messages loaded", len(messagelist))
 
 		err = templates.ExecuteTemplate(w, "chat/chat.html", struct {
 			CurrentUser string
@@ -468,18 +499,29 @@ func main() {
 	}))
 
 	mux.HandleFunc("POST /send_message", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		user, _ := SessionUsername(r)
+		err := r.ParseForm()
+		if err != nil {
+			log.Println("Form parse error")
+		}
+		user, ok := SessionUsername(r)
+		if !ok {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		userfriend := r.FormValue("userfriend")
 		message := r.FormValue("message")
-		err := redisClient.CacheMessage(r.Context(), "room1", []byte(message), 24*time.Hour)
+		//log.Println("send message: user, friend and message loaded")
+		err = redisClient.CacheMessage(r.Context(), "room1", []byte(message), 24*time.Hour)
 		if err != nil {
 			log.Printf("redis error")
 		}
+		log.Printf("Saving message from %s %s %s", user, userfriend, message)
 		if err := chat.Send(user, userfriend, message); err != nil {
 			http.Error(w, "Failed to send message", http.StatusInternalServerError)
 			log.Printf("Send message error: %v from user: %v to user: %v", err, user, userfriend)
 			return
 		}
+		messagesSend.WithLabelValues(user, userfriend).Inc()
 		broadcast <- Message{
 			Sender:       user,
 			SenderFriend: userfriend,
@@ -575,7 +617,7 @@ func main() {
 			log.Printf("Get userlist error: %v", err)
 			return
 		}
-		if username != "Admin" {
+		if username != "admin" {
 			http.Error(w, "You are not admin", http.StatusForbidden)
 			return
 		}
@@ -606,7 +648,7 @@ func main() {
 
 	mux.HandleFunc("POST /admin/shutdown", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		admin, _ := SessionUsername(r)
-		if admin != "Admin" {
+		if admin != "admin" {
 			http.Error(w, "You are not admin", http.StatusForbidden)
 			return
 		}

@@ -26,9 +26,9 @@
         {{end}}
     </div>
 
-    <form id="chat-form">
-        <input type="hidden" id="friend" value="{{.Friend}}">
-        <textarea id="message" required></textarea>
+    <form method="POST" action="/send_message" enctype="application/x-www-form-urlencoded">
+        <input type="hidden" name="userfriend" value="{{.Friend}}">
+        <textarea name="message" required></textarea>
         <button type="submit">Send</button>
     </form>
     <a href="/friends">Back to friendlist</a>
@@ -41,13 +41,16 @@
     const messagesDiv = document.getElementById('messages');
 
     ws.onmessage = function(e) {
-        try {
-            const msg = JSON.parse(e.data);
-            messagesDiv.innerHTML += `<div><strong>${msg.sender}:</strong> ${msg.text}</div>`;
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        } catch (err) {
-            console.error('Error parsing message:', err);
-        }
+        const data = JSON.parse(e.data);
+        const messageElement = document.createElement('div');
+        messageElement.innerHTML = `<strong>${data.sender}:</strong> ${data.text}`;
+        messagesDiv.appendChild(messageElement);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        
+        const chatKey = `chat_${data.sender}_${data.senderfriend}`;
+        const history = JSON.parse(localStorage.getItem(chatKey) || '[]');
+        history.push(data);
+        localStorage.setItem(chatKey, JSON.stringify(history));
     };
 
     ws.onerror = function(error) {
