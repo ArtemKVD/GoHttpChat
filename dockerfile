@@ -9,7 +9,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /app/httpchatgo ./server
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /app/httpchatgo ./cmd/server
 
 FROM alpine:3.19
 

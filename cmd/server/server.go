@@ -5,68 +5,27 @@ import (
 	"encoding/json"
 	"html/template"
 	"log"
-	"math/big"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
-	cache "github.com/ArtemKVD/HttpChatGo/cache"
-	chat "github.com/ArtemKVD/HttpChatGo/chat"
-	news "github.com/ArtemKVD/HttpChatGo/news"
+	chat "github.com/ArtemKVD/HttpChatGo/internal/chat"
+	metrics "github.com/ArtemKVD/HttpChatGo/internal/metrics"
+	news "github.com/ArtemKVD/HttpChatGo/internal/news"
+	sertificate "github.com/ArtemKVD/HttpChatGo/internal/sertificate"
+	session "github.com/ArtemKVD/HttpChatGo/internal/session"
+	templates "github.com/ArtemKVD/HttpChatGo/internal/templates"
 	db "github.com/ArtemKVD/HttpChatGo/pkg/DB"
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
+	cache "github.com/ArtemKVD/HttpChatGo/pkg/redis"
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var (
-	messagesSend = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "chat_messages_sent_total",
-	}, []string{"sender", "receiver"})
-
-	activeUsers = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "chat_active_users",
-	})
-
-	httpDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "http_request_duration_seconds",
-		Buckets: []float64{0.1, 0.3, 0.5},
-	}, []string{"path", "method"})
-)
-
+var mutex = sync.Mutex{}
 var redisClient *cache.RedisClient
-
-var name string
-var pass string
-var sessions = make(map[string]string)
-
-var clients = make(map[*Client]bool)
-var broadcast = make(chan Message)
-var mutex = &sync.Mutex{}
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-}
-
-type Client struct {
-	conn *websocket.Conn
-	send chan []byte
-	user string
-}
 
 type Message struct {
 	Sender       string `json:"sender"`
@@ -76,153 +35,7 @@ type Message struct {
 
 const connectionDB = "host=postgres user=postgres dbname=Users password=admin sslmode=disable"
 
-func (c *Client) ReadM() {
-	defer func() {
-		mutex.Lock()
-		delete(clients, c)
-		mutex.Unlock()
-		c.conn.Close()
-	}()
-
-	for {
-		var msg Message
-		err := c.conn.ReadJSON(&msg)
-		if err != nil {
-			log.Printf("Read error: %v", err)
-			break
-		}
-		msg.Sender = c.user
-		broadcast <- msg
-	}
-}
-
-func (c *Client) WriteM() {
-	defer c.conn.Close()
-	for {
-		message, ok := <-c.send
-		if !ok {
-			return
-		}
-		err := c.conn.WriteMessage(websocket.TextMessage, message)
-		if err != nil {
-			log.Printf("Write error: %v", err)
-			return
-		}
-	}
-}
-
-func handleConnections(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer conn.Close()
-
-	user, ok := SessionUsername(r)
-	if !ok {
-		return
-	}
-
-	client := &Client{
-		conn: conn,
-		send: make(chan []byte, 256),
-		user: user,
-	}
-
-	mutex.Lock()
-	clients[client] = true
-	mutex.Unlock()
-
-	go client.WriteM()
-	client.ReadM()
-	ctx := context.Background()
-	pubsub := redisClient.Subscribe(ctx, "chat_updates")
-	defer pubsub.Close()
-
-	go func() {
-		for msg := range pubsub.Channel() {
-			conn.WriteMessage(websocket.TextMessage, []byte(msg.Payload))
-		}
-	}()
-}
-
-func loadTemplates() (*template.Template, error) {
-	tmpl := template.New("").Funcs(template.FuncMap{})
-
-	err := filepath.Walk("views", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() && strings.HasSuffix(path, ".html") {
-			bytes, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-
-			name := strings.TrimPrefix(
-				strings.ReplaceAll(path, "\\", "/"),
-				"views/",
-			)
-
-			if _, err := tmpl.New(name).Parse(string(bytes)); err != nil {
-				log.Fatalf("failed to parse %s error:%v", name, err)
-			}
-		}
-		return nil
-	})
-
-	return tmpl, err
-}
-
-func createSession(username string, w http.ResponseWriter) {
-	sessionID := uuid.New().String()
-	ctx := context.Background()
-
-	err := redisClient.Set(ctx, "session:"+sessionID, username, 24*time.Hour)
-	if err != nil {
-		log.Printf("Ошибка создания сессии в Redis: %v", err)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session",
-		Value:    sessionID,
-		Path:     "/",
-		HttpOnly: true,
-		MaxAge:   86400,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func SessionUsername(r *http.Request) (string, bool) {
-	cookie, err := r.Cookie("session")
-	if err != nil {
-		return "", false
-	}
-
-	ctx := context.Background()
-	username, err := redisClient.Get(ctx, "session:"+cookie.Value)
-	if err != nil {
-		return "", false
-	}
-
-	return username, true
-}
-
-func destroySession(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session",
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		MaxAge:   10000,
-	})
-}
-
-func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
 		if err != nil {
@@ -241,35 +54,6 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r.WithContext(ctx))
 	}
 }
-
-func GenerateSelfSignedCert() (tls.Certificate, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Localhost"},
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
-		DNSNames:  []string{"localhost"},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	return tls.Certificate{
-		Certificate: [][]byte{certDER},
-		PrivateKey:  priv,
-	}, nil
-}
-
 func main() {
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -286,6 +70,9 @@ func main() {
 		redisHost = "redis"
 	}
 	redisClient = cache.NewRedisClient(redisHost+":6379", "")
+	if redisClient == nil {
+		log.Fatal("Failed to initialize Redis client")
+	}
 	cache.WaitRedis(redisClient)
 
 	if err := redisClient.Ping(context.Background()); err != nil {
@@ -295,7 +82,7 @@ func main() {
 
 	shutdown := make(chan struct{})
 
-	templates, err := loadTemplates()
+	templates, err := templates.LoadTemplates()
 
 	for _, t := range templates.Templates() {
 		log.Println("Loaded template:", t.Name())
@@ -304,7 +91,9 @@ func main() {
 	if err != nil {
 		log.Printf("Error load templates %v", err)
 	}
-	mux.HandleFunc("GET /ws", handleConnections)
+	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
+		session.HandleConnections(redisClient, w, r)
+	})
 	mux.HandleFunc("GET /register", func(w http.ResponseWriter, r *http.Request) {
 		err := templates.ExecuteTemplate(w, "auth/register.html", nil)
 		if err != nil {
@@ -340,7 +129,10 @@ func main() {
 			return
 		}
 
-		createSession(name, w)
+		err = session.CreateSession(redisClient, name, w)
+		if err != nil {
+			log.Println("CreateSession error")
+		}
 
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
 	})
@@ -405,8 +197,8 @@ func main() {
 			return
 		}
 
-		createSession(name, w)
-		activeUsers.Inc()
+		session.CreateSession(redisClient, name, w)
+		metrics.ActiveUsers.Inc()
 		log.Printf("User %v login at %v", name, time.Now())
 
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
@@ -418,11 +210,11 @@ func main() {
 			Name: name,
 		})
 	})
-	go mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
 		if err == nil {
 			ctx := context.Background()
-			activeUsers.Dec()
+			metrics.ActiveUsers.Dec()
 			redisClient.Del(ctx, "session:"+cookie.Value)
 		}
 
@@ -434,7 +226,7 @@ func main() {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /friends", func(w http.ResponseWriter, r *http.Request) {
-		username, ok := SessionUsername(r)
+		username, ok := session.SessionUsername(redisClient, r)
 		if !ok {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
@@ -460,8 +252,8 @@ func main() {
 		}
 	})
 
-	mux.HandleFunc("POST /add_friend", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		username, _ := SessionUsername(r)
+	mux.HandleFunc("POST /add_friend", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		username, _ := session.SessionUsername(redisClient, r)
 		friendname := r.FormValue("friendname")
 
 		if err := db.AddFriend(username, friendname); err != nil {
@@ -473,8 +265,8 @@ func main() {
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
 	}))
 
-	mux.HandleFunc("GET /chat/{friend}", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		user, _ := SessionUsername(r)
+	mux.HandleFunc("GET /chat/{friend}", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := session.SessionUsername(redisClient, r)
 		friend := r.PathValue("friend")
 		messagelist, err := chat.Messagelist(user, friend)
 		if err != nil {
@@ -498,12 +290,12 @@ func main() {
 
 	}))
 
-	mux.HandleFunc("POST /send_message", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /send_message", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
 		if err != nil {
 			log.Println("Form parse error")
 		}
-		user, ok := SessionUsername(r)
+		user, ok := session.SessionUsername(redisClient, r)
 		if !ok {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -521,8 +313,8 @@ func main() {
 			log.Printf("Send message error: %v from user: %v to user: %v", err, user, userfriend)
 			return
 		}
-		messagesSend.WithLabelValues(user, userfriend).Inc()
-		broadcast <- Message{
+		metrics.MessagesSend.WithLabelValues(user, userfriend).Inc()
+		session.Broadcast <- session.Message{
 			Sender:       user,
 			SenderFriend: userfriend,
 			Text:         message,
@@ -531,8 +323,8 @@ func main() {
 		http.Redirect(w, r, "/chat/"+userfriend, http.StatusSeeOther)
 	}))
 
-	mux.HandleFunc("GET /news", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		currentUser, _ := SessionUsername(r)
+	mux.HandleFunc("GET /news", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		currentUser, _ := session.SessionUsername(redisClient, r)
 
 		friends, err := db.GetFriends(currentUser)
 		if err != nil {
@@ -558,8 +350,8 @@ func main() {
 
 	}))
 
-	mux.HandleFunc("POST /news", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		currentUser, _ := SessionUsername(r)
+	mux.HandleFunc("POST /news", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		currentUser, _ := session.SessionUsername(redisClient, r)
 
 		postText := r.FormValue("post_text")
 
@@ -606,12 +398,12 @@ func main() {
 			return
 		}
 
-		createSession(username, w)
+		session.CreateSession(redisClient, username, w)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("GET /admin", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		username, _ := SessionUsername(r)
+	mux.HandleFunc("GET /admin", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		username, _ := session.SessionUsername(redisClient, r)
 		users, err := db.Userlist()
 		if err != nil {
 			log.Printf("Get userlist error: %v", err)
@@ -633,7 +425,7 @@ func main() {
 		}
 	}))
 
-	mux.HandleFunc("POST /admin/block", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /admin/block", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 
 		username := r.FormValue("username")
 
@@ -646,8 +438,8 @@ func main() {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}))
 
-	mux.HandleFunc("POST /admin/shutdown", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		admin, _ := SessionUsername(r)
+	mux.HandleFunc("POST /admin/shutdown", AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		admin, _ := session.SessionUsername(redisClient, r)
 		if admin != "admin" {
 			http.Error(w, "You are not admin", http.StatusForbidden)
 			return
@@ -659,7 +451,7 @@ func main() {
 
 		close(shutdown)
 	}))
-	cert, err := GenerateSelfSignedCert()
+	cert, err := sertificate.GenerateSelfSignedCert()
 	if err != nil {
 		log.Fatalf("Failed to generate certificate: %v", err)
 	}
@@ -676,16 +468,16 @@ func main() {
 	}
 
 	go func() {
-		for msg := range broadcast {
+		for msg := range session.Broadcast {
 			mutex.Lock()
-			for client := range clients {
-				if client.user == msg.SenderFriend || client.user == msg.Sender {
+			for client := range session.Clients {
+				if client.User == msg.SenderFriend || client.User == msg.Sender {
 					response := map[string]string{
 						"sender": msg.Sender,
 						"text":   msg.Text,
 					}
 					jsonMsg, _ := json.Marshal(response)
-					client.send <- jsonMsg
+					client.Send <- jsonMsg
 				}
 			}
 			mutex.Unlock()
