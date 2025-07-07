@@ -3,16 +3,49 @@
 <head>
     <title>Chat with {{.Friend}}</title>
     <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
         #messages {
-            height: 300px;
-            overflow-y: scroll;
-            border: 1px solid #ccc;
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
             padding: 10px;
             margin-bottom: 10px;
+            background: #f9f9f9;
+            border-radius: 5px;
         }
         #message {
             width: 100%;
-            min-height: 60px;
+            padding: 10px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            resize: none;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #e3f2fd;
+            border-radius: 4px;
+        }
+        .message strong {
+            color: #1976d2;
+        }
+        button {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1565c0;
         }
     </style>
 </head>
@@ -20,19 +53,18 @@
     <h1>Chat with {{.Friend}}</h1>
     <div id="messages">
         {{range .Messages}}
-        <div>
+        <div class="message">
             <strong>{{.Sname}}:</strong> {{.Text}}
         </div>
         {{end}}
     </div>
 
-    <form method="POST" action="/send_message" enctype="application/x-www-form-urlencoded">
-        <input type="hidden" name="userfriend" value="{{.Friend}}">
-        <textarea name="message" required></textarea>
+    <form id="chat-form">
+        <input type="hidden" id="friend" value="{{.Friend}}">
+        <textarea id="message" placeholder="Type your message..." required></textarea>
         <button type="submit">Send</button>
     </form>
     <a href="/friends">Back to friendlist</a>
-
     <script>
     const ws = new WebSocket(`wss://${location.host}/ws`);
     const form = document.getElementById('chat-form');

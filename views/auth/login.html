@@ -1,15 +1,52 @@
 <!DOCTYPE html>
-			<html>
-			<head>
-			</head>
-			<body>
-				<h1>login</h1>
-				<form method="POST" action="/login">
-					<label for="name">name:</label><br>
-					<input type="text" id="nametologin" name="nametologin" required><br>
-					<label for="pass">pass:</label><br>
-					<input type="number" id="passwordtologin" name="passtologin" required><br>
-					<button>send</button>
-				</form>
-			</body>
-			</html>
+<html>
+<head>
+    <title>Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        form {
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            margin: 8px 0;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <form method="POST" action="/login">
+        <h2>Login</h2>
+        <label for="nametologin">Username:</label>
+        <input type="text" id="nametologin" name="nametologin" required>
+        
+        <label for="passtologin">Password:</label>
+        <input type="password" id="passtologin" name="passtologin" required>
+        
+        <button type="submit">Login</button>
+    </form>
+</body>
+</html>
