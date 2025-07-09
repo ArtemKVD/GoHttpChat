@@ -2,13 +2,15 @@ package dbase
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
-const connectionDB = "host=postgres user=postgres dbname=Users password=admin sslmode=disable"
+var connectionDB string = fmt.Sprintf("host=%s user=%s dbname=%s password=%s sslmode=%s", os.Getenv("DB_HOST"), os.Getenv("DB_USER"), os.Getenv("DB_NAME"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_SSLMODE"))
 
 func WaitPostgres() {
 	db, err := sql.Open("postgres", connectionDB)

@@ -33,8 +33,6 @@ type Message struct {
 	Text         string `json:"text"`
 }
 
-const connectionDB = "host=postgres user=postgres dbname=Users password=admin sslmode=disable"
-
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
