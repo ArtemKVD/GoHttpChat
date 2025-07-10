@@ -1,0 +1,7 @@
+DROP TABLE UserLP
+
+DROP TABLE friends
+
+DROP TABLE messages
+
+DROP TABLE news
